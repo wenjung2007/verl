@@ -169,9 +169,7 @@ The script selects its dense Qwen3 preset with `MODEL_SIZE=0.6B | 1.7B | 4B | 8B
 
 ## 7. Qwen3.5 on TPU v7x
 
-[`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) runs GRPO on GSM8K with Qwen3.5 (default `Qwen3.5-35B-A3B` MoE) on TPU v7x, with one trainer slice and one rollout slice (e.g. `2x2x1` each). `MODEL_PATH` must be a text-only Qwen3.5 checkpoint (`Qwen3_5[Moe]ForCausalLM`, i.e. the language model of the Hugging Face checkpoint without the vision encoder). Submit it as in step 5.
-
-`TRAINER_MODE=graph_trainer` runs the actor update through TorchTitan's `TpuGraphTrainer` (traced once, compiled as `GRAPH_TRAINER_SPLIT_LAYERS` layers per executable). It needs `verl-hardware-plugin` `main` ([verl-project/verl-hardware-plugin#187](https://github.com/verl-project/verl-hardware-plugin/pull/187) or later), `USE_KL_LOSS=False`, `EXPERT_PARALLEL_SIZE=1`, and `USE_DYNAMIC_BSZ=True` with `STATIC_MICRO_BATCH_LEN` = `MAX_TOKEN_LEN_PER_GPU` (one traced shape; a step that does not fit in the micro-batches gets one more). Set the micro-batch length from the real tokens per rank of an earlier run (`perf/total_num_tokens` / number of trainer ranks), and `kda_document_budget` to the sequences per rank plus one. On v7x `2x2x1` + `2x2x1`, the graph-mode command below reaches `perf/mfu/actor` 0.111 (10-step mean) and `update_actor` 8.1 s for 256 sequences; the first step compiles in about 216 s.
+[`run_qwen3_5_torchtitan.sh`](run_qwen3_5_torchtitan.sh) runs GRPO on GSM8K with Qwen3.5 (default `Qwen3.5-35B-A3B` MoE) on TPU v7x, with one trainer slice and one rollout slice (e.g. `2x2x1` each). `MODEL_PATH` must be a text-only Qwen3.5 checkpoint (`Qwen3_5[Moe]ForCausalLM`, i.e. the language model of the Hugging Face checkpoint without the vision encoder). Submit it as in step 5:
 
 ```bash
 # Eager (default)
