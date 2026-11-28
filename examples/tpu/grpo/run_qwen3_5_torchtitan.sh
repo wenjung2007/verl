@@ -173,44 +173,22 @@ MAX_TOKEN_LEN_PER_GPU="${MAX_TOKEN_LEN_PER_GPU:-$(( MAX_MODEL_LEN * MICRO_BATCH_
 # USE_DYNAMIC_BSZ=True packs each micro-batch up to MAX_TOKEN_LEN_PER_GPU tokens (instead of MICRO_BATCH_SIZE
 # sequences) for the actor update and the rollout / reference log-probs; verl requires the three to agree.
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-False}"
-# MoE expert-parallel knobs of verl-hardware-plugin (engine_kwargs.tpu.*), passed only when set:
-# EP_TRANSPORT (auto / ring_of_experts / ragged_all_to_all: the token transport of torchtitan's EP dispatcher; auto
-# runs Ring-of-Experts when EXPERT_PARALLEL_SIZE <= num_experts_per_tok), EP_TOKEN_CHUNKS (chunked
-# dispatch -> experts -> combine pipelining) and EP_PAIRED_GROUPED_MM (paired W1+W3 Pallas grouped matmul under EP).
+# Optional verl-hardware-plugin options (engine_kwargs.tpu.<lowercase name>), passed only when set:
+# EP_TRANSPORT (auto / ring_of_experts / ragged_all_to_all), EP_TOKEN_CHUNKS, EP_PAIRED_GROUPED_MM,
+# AC_SAVE_SPLASH_AND_ROUTING, STATIC_MICRO_BATCH_LEN / STATIC_MAX_RESPONSE_LEN (pad to one traced shape) and
+# TRAINER_MODE=graph_trainer (needs USE_KL_LOSS=False, EXPERT_PARALLEL_SIZE=1 and STATIC_MICRO_BATCH_LEN).
 EXTRA_TPU_OVERRIDES=()
-if [[ -n "${EP_TRANSPORT:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ep_transport=${EP_TRANSPORT}")
-fi
-if [[ -n "${EP_TOKEN_CHUNKS:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ep_token_chunks=${EP_TOKEN_CHUNKS}")
-fi
-if [[ -n "${EP_PAIRED_GROUPED_MM:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ep_paired_grouped_mm=${EP_PAIRED_GROUPED_MM}")
-fi
-if [[ -n "${AC_SAVE_SPLASH_AND_ROUTING:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ac_save_splash_and_routing=${AC_SAVE_SPLASH_AND_ROUTING}")
-fi
-# STATIC_MICRO_BATCH_LEN / STATIC_MAX_RESPONSE_LEN: pad every packed micro-batch (and its response bucket) to at
-# least this many tokens, e.g. MAX_TOKEN_LEN_PER_GPU / MAX_RESPONSE_LEN, so the trainer compiles one shape.
-if [[ -n "${STATIC_MICRO_BATCH_LEN:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.static_micro_batch_len=${STATIC_MICRO_BATCH_LEN}")
-fi
-if [[ -n "${STATIC_MAX_RESPONSE_LEN:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.static_max_response_len=${STATIC_MAX_RESPONSE_LEN}")
-fi
-# TRAINER_MODE=graph_trainer: the actor update runs as one compiled graph (TorchTitan TpuGraphTrainer). Needs
-# USE_KL_LOSS=False, EXPERT_PARALLEL_SIZE=1, USE_DYNAMIC_BSZ=True with STATIC_MICRO_BATCH_LEN (one traced shape); several
-# micro-batches per rank need verl-hardware-plugin#187 or later (see README section 7).
-if [[ -n "${TRAINER_MODE:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.trainer_mode=${TRAINER_MODE}")
-fi
+for opt in EP_TRANSPORT EP_TOKEN_CHUNKS EP_PAIRED_GROUPED_MM AC_SAVE_SPLASH_AND_ROUTING \
+    STATIC_MICRO_BATCH_LEN STATIC_MAX_RESPONSE_LEN TRAINER_MODE; do
+    if [[ -n "${!opt:-}" ]]; then
+        EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.${opt,,}=${!opt}")
+    fi
+done
+# Graph mode: GRAPH_TRAINER_SPLIT_LAYERS=N compiles N layers per forward / backward executable.
 if [[ "${TRAINER_MODE:-}" == "graph_trainer" ]]; then
-    # GRAPH_TRAINER_* go to the plugin's engine_kwargs.tpu.graph_trainer (TorchTitan TpuGraphTrainerCompileConfig).
-    # MODEL_KERNELS defaults to moe,lce; add kda for the Tokamax KDA kernels (verl-hardware-plugin#184 or later).
-    # GRAPH_TRAINER_SPLIT_LAYERS=N compiles N layers per forward / backward executable (graph split with the
-    # fsdp_pipeline backward, as torchtitan's qwen35_moe_35b_split_tokamax_benchmark) instead of one step graph.
     if [[ -n "${GRAPH_TRAINER_SPLIT_LAYERS:-}" ]]; then
-        GRAPH_TRAINER_EXTRA="enable_remat_barriers:false,fsdp_barrier_policy:none,graph_split:{enabled:true,forward_layers_per_executable:${GRAPH_TRAINER_SPLIT_LAYERS},forward_isolate_prefix:true,backward_partition_mode:fsdp_pipeline,backward_layers_per_executable:${GRAPH_TRAINER_SPLIT_LAYERS}}"
+        N="${GRAPH_TRAINER_SPLIT_LAYERS}"
+        GRAPH_TRAINER_EXTRA="enable_remat_barriers:false,fsdp_barrier_policy:none,graph_split:{enabled:true,forward_layers_per_executable:${N},forward_isolate_prefix:true,backward_partition_mode:fsdp_pipeline,backward_layers_per_executable:${N}}"
     else
         GRAPH_TRAINER_EXTRA="fsdp_barrier_policy:${GRAPH_TRAINER_FSDP_BARRIER_POLICY:-interleave}"
     fi
