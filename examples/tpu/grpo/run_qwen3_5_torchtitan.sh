@@ -174,12 +174,12 @@ MAX_TOKEN_LEN_PER_GPU="${MAX_TOKEN_LEN_PER_GPU:-$(( MAX_MODEL_LEN * MICRO_BATCH_
 # sequences) for the actor update and the rollout / reference log-probs; verl requires the three to agree.
 USE_DYNAMIC_BSZ="${USE_DYNAMIC_BSZ:-False}"
 # MoE expert-parallel knobs of verl-hardware-plugin (engine_kwargs.tpu.*), passed only when set:
-# EP_DISPATCHER (auto / ragged / static; static keeps torchtitan's TpuQwen35TokenDispatcher, whose fast dropless
-# build runs Ring-of-Experts when EXPERT_PARALLEL_SIZE <= num_experts_per_tok), EP_TOKEN_CHUNKS (chunked
+# EP_TRANSPORT (auto / ring_of_experts / ragged_all_to_all: the token transport of torchtitan's EP dispatcher; auto
+# runs Ring-of-Experts when EXPERT_PARALLEL_SIZE <= num_experts_per_tok), EP_TOKEN_CHUNKS (chunked
 # dispatch -> experts -> combine pipelining) and EP_PAIRED_GROUPED_MM (paired W1+W3 Pallas grouped matmul under EP).
 EXTRA_TPU_OVERRIDES=()
-if [[ -n "${EP_DISPATCHER:-}" ]]; then
-    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ep_dispatcher=${EP_DISPATCHER}")
+if [[ -n "${EP_TRANSPORT:-}" ]]; then
+    EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ep_transport=${EP_TRANSPORT}")
 fi
 if [[ -n "${EP_TOKEN_CHUNKS:-}" ]]; then
     EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.ep_token_chunks=${EP_TOKEN_CHUNKS}")
@@ -199,14 +199,14 @@ if [[ -n "${STATIC_MAX_RESPONSE_LEN:-}" ]]; then
     EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.static_max_response_len=${STATIC_MAX_RESPONSE_LEN}")
 fi
 # TRAINER_MODE=graph_trainer: the actor update runs as one compiled graph (TorchTitan TpuGraphTrainer). Needs
-# USE_KL_LOSS=False, EXPERT_PARALLEL_SIZE=1, USE_DYNAMIC_BSZ=True with one micro-batch per rank (STATIC_MICRO_BATCH_LEN).
+# USE_KL_LOSS=False, EXPERT_PARALLEL_SIZE=1, USE_DYNAMIC_BSZ=True with STATIC_MICRO_BATCH_LEN (one traced shape); several
+# micro-batches per rank need verl-hardware-plugin#187 or later (see README section 7).
 if [[ -n "${TRAINER_MODE:-}" ]]; then
     EXTRA_TPU_OVERRIDES+=("+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.trainer_mode=${TRAINER_MODE}")
 fi
 if [[ "${TRAINER_MODE:-}" == "graph_trainer" ]]; then
     # GRAPH_TRAINER_* go to the plugin's engine_kwargs.tpu.graph_trainer (TorchTitan TpuGraphTrainerCompileConfig).
-    # MODEL_KERNELS defaults to moe,lce: verl-hardware-plugin main rejects the Tokamax KDA kernels (kda) in graph mode
-    # until it pins their document budget for the run.
+    # MODEL_KERNELS defaults to moe,lce; add kda for the Tokamax KDA kernels (verl-hardware-plugin#184 or later).
     # GRAPH_TRAINER_SPLIT_LAYERS=N compiles N layers per forward / backward executable (graph split with the
     # fsdp_pipeline backward, as torchtitan's qwen35_moe_35b_split_tokamax_benchmark) instead of one step graph.
     if [[ -n "${GRAPH_TRAINER_SPLIT_LAYERS:-}" ]]; then

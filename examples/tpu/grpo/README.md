@@ -176,7 +176,7 @@ ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-35B-A3B bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
 ```
 
-**Graph-mode actor update (optional).** With a `verl-hardware-plugin` whose `engine_kwargs.tpu.graph_trainer` takes a settings dict (e.g. `git -C ../verl-hardware-plugin checkout 8a9e485da66ea76d40b01b4940db08928fc45061`), `TRAINER_MODE=graph_trainer` runs the actor update through TorchTitan's `TpuGraphTrainer`. It needs `USE_KL_LOSS=False`, `EXPERT_PARALLEL_SIZE=1` and one micro-batch per rank (`USE_DYNAMIC_BSZ=True` with `STATIC_MICRO_BATCH_LEN` = `MAX_TOKEN_LEN_PER_GPU`). `GRAPH_TRAINER_SPLIT_LAYERS=2` compiles two layers per forward / backward executable instead of one step graph, as TorchTitan's `qwen35_moe_35b_split_tokamax_benchmark` SFT recipe does; without it the 40-layer step compiles very slowly.
+**Graph-mode actor update (optional).** With `verl-hardware-plugin` `main` ([verl-project/verl-hardware-plugin#187](https://github.com/verl-project/verl-hardware-plugin/pull/187) or later) and the image built from this directory's `Dockerfile`, `TRAINER_MODE=graph_trainer` runs the actor update through TorchTitan's `TpuGraphTrainer`. It needs `USE_KL_LOSS=False`, `EXPERT_PARALLEL_SIZE=1` and one traced shape (`USE_DYNAMIC_BSZ=True` with `STATIC_MICRO_BATCH_LEN` = `MAX_TOKEN_LEN_PER_GPU`); a rank can train several micro-batches per step (gradient accumulation). `GRAPH_TRAINER_SPLIT_LAYERS=2` compiles two layers per forward / backward executable instead of one step graph, as TorchTitan's `qwen35_moe_35b_split_tokamax_benchmark` SFT recipe does; without it the 40-layer step compiles very slowly.
 
 ```bash
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
@@ -187,22 +187,20 @@ ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
 ```
 
-**Best measured graph-mode configuration (Qwen3.5-35B-A3B, v7x `2x2x1` trainer + `2x2x1` rollout).** This adds the Tokamax KDA kernels for the GatedDeltaNet layers (`MODEL_KERNELS=moe,kda,lce`) and the trainer libtpu flags of TorchTitan's `qwen35_moe_35b_split_tokamax_benchmark` recipe to the command above. Measured: `update_actor` 4.45-4.51 s per step and `perf/mfu/actor` 0.104 on average (0.085-0.128, it follows the real token count of the step) over 10 steps, against 21.96 s / 0.0107 for the best eager configuration; the first step traces and compiles in about 220 s. It needs:
-
-1. The image built with the TorchTitan commit the numbers were measured with (`tpu_flags` and the Tokamax KDA kernels): `docker buildx build -t <IMAGE> --push --build-arg TORCHTITAN_COMMIT=c56f441fca0f3349014622d02cc2165e25957d95 examples/tpu/grpo`.
-2. A `verl-hardware-plugin` with the graph-mode KDA document budget, [verl-project/verl-hardware-plugin#184](https://github.com/verl-project/verl-hardware-plugin/pull/184) (not merged yet): `git -C ../verl-hardware-plugin fetch origin pull/184/head:graph-trainer-kda && git -C ../verl-hardware-plugin checkout graph-trainer-kda`. Without it, graph mode rejects `kda`.
+**Best measured graph-mode configuration (Qwen3.5-35B-A3B, v7x `2x2x1` trainer + `2x2x1` rollout).** This adds the Tokamax KDA kernels for the GatedDeltaNet layers (`MODEL_KERNELS=moe,kda,lce`), the trainer libtpu flags of TorchTitan's `qwen35_moe_35b_split_tokamax_benchmark` recipe and two 28K-token micro-batches per rank (gradient accumulation) to the command above. Measured over two 10-step runs: `perf/mfu/actor` 0.111-0.112 on average (0.095-0.126 per step, it follows the real token count of the step) and `update_actor` 8.11-8.15 s for 256 sequences (31.8 ms per sequence), against 0.104 and 35.0 ms per sequence with one 32K micro-batch per rank, and 0.0107 MFU for the best eager configuration; the first step traces and compiles in about 216 s. It uses the image built from this directory's `Dockerfile` (its TorchTitan pin includes gradient accumulation in `TpuGraphTrainer`; the numbers were measured with TorchTitan `e78271f7`) and `verl-hardware-plugin` `main` (verl-project/verl-hardware-plugin#187 or later).
 
 ```bash
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-35B-A3B TRAINER_MODE=graph_trainer GRAPH_TRAINER_SPLIT_LAYERS=2 MODEL_KERNELS=moe,kda,lce \
   USE_KL_LOSS=False PARAM_DTYPE=bfloat16 OPTIM_IMPL=fused \
   SPARSECORE_OFFLOAD=True TRAINER_SCOPED_VMEM_LIMIT_KIB=65472 TRAINER_EXTRA_LIBTPU_INIT_ARGS=--xla_tpu_dvfs_p_state=7 \
-  TRAIN_BATCH_SIZE=32 PPO_MINI_BATCH_SIZE=32 ROLLOUT_N=4 \
-  USE_DYNAMIC_BSZ=True MAX_TOKEN_LEN_PER_GPU=32768 STATIC_MICRO_BATCH_LEN=32768 STATIC_MAX_RESPONSE_LEN=2048 \
-  bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh
+  TRAIN_BATCH_SIZE=64 PPO_MINI_BATCH_SIZE=64 ROLLOUT_N=4 \
+  USE_DYNAMIC_BSZ=True MAX_TOKEN_LEN_PER_GPU=28672 STATIC_MICRO_BATCH_LEN=28672 STATIC_MAX_RESPONSE_LEN=2048 \
+  bash examples/tpu/grpo/run_qwen3_5_torchtitan.sh \
+  +actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.kda_document_budget=33
 ```
 
-Each rank trains one 32K-token micro-batch per step (16 sequences), so the whole mini-batch must fit: raise `MAX_TOKEN_LEN_PER_GPU` / `STATIC_MICRO_BATCH_LEN` together if the run reports more than one micro-batch. The KDA document budget is pinned on the first step from the most sequences per micro-batch; set `+actor_rollout_ref.actor.torchtitan.engine_kwargs.tpu.kda_document_budget=<N>` if a later step packs more.
+Each rank trains 32 sequences per step, about 47K real tokens on GSM8K, in two micro-batches padded to 28,672 tokens (83 % real tokens on average; with 32K micro-batches it was 73 %, and MFU counts real tokens only). If a step does not fit in two, verl adds a third micro-batch: the step is slower but does not fail. Choose `MAX_TOKEN_LEN_PER_GPU` = `STATIC_MICRO_BATCH_LEN` from the real tokens per rank of an earlier run (`perf/total_num_tokens` / number of trainer ranks). `kda_document_budget=33` covers the 32 sequences of a rank however verl splits them.
 
 ### Qwen3.5-397B-A17B (expert parallelism)
 
@@ -219,7 +217,7 @@ Full-parameter 8K GRPO on 64 TPU v7x chips (a `2x4x4` trainer slice and four `2x
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env MODEL_NAME=Qwen3.5-397B-A17B \
   NNODES_TRAINER=8 EXPERT_PARALLEL_SIZE=8 PARAM_DTYPE=bfloat16 FP32_MASTER=True OPTIMIZER_HOST_OFFLOAD=True USE_KL_LOSS=False \
-  EP_DISPATCHER=static EP_TOKEN_CHUNKS=8 EP_PAIRED_GROUPED_MM=True AC_SAVE_SPLASH_AND_ROUTING=True \
+  EP_TOKEN_CHUNKS=8 EP_PAIRED_GROUPED_MM=True AC_SAVE_SPLASH_AND_ROUTING=True \
   SPARSECORE_OFFLOAD=True TRAINER_SCOPED_VMEM_LIMIT_KIB=65472 \
   USE_DYNAMIC_BSZ=True MAX_TOKEN_LEN_PER_GPU=16384 STATIC_MICRO_BATCH_LEN=16384 STATIC_MAX_RESPONSE_LEN=7680 \
   NUM_WARMUP_BATCHES=3 MAX_NUM_SEQS=512 MAX_NUM_BATCHED_TOKENS=8192 \
