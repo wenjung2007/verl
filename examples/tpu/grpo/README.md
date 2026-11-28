@@ -218,9 +218,7 @@ ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
 | v7x (default) | `2x2x1` + `2x2x1` | `numOfHosts: 1`, `google.com/tpu: "4"`, `gke-tpu-accelerator: tpu7x`, `gke-tpu-topology: 2x2x1` |
 | v5p | `2x2x4` + `2x2x4` | `numOfHosts: 4`, `google.com/tpu: "4"`, `gke-tpu-accelerator: tpu-v5p-slice`, `gke-tpu-topology: 2x2x4` |
 
-Upload the checkpoint as in step 3 (the recipe reads `/data/assets/hf/Qwen3-30B-A3B`, or set `MODEL_PATH`), create the Ray cluster for the TPU as in step 4, then submit as in step 5.
-
-The actor reduces FSDP gradients in `bfloat16` (`MIXED_PRECISION_REDUCE`; set `float32` for `float32` reduce-scatter). `TRAINER_MODE=graph_trainer` (`verl-hardware-plugin` with PR #134 or later, e.g. `git -C ../verl-hardware-plugin checkout 8a9e485da66ea76d40b01b4940db08928fc45061`) runs the actor update through TorchTitan's `TpuGraphTrainer`; `STATIC_MICRO_BATCH_LEN` defaults to `MAX_TOKEN_LEN_PER_GPU`. Unsplit (`tpu_selective`, FSDP barrier policy `prefetch` on v5p and `interleave` elsewhere) gives the lowest step time at `8192` tokens/chip; `GRAPH_TRAINER_SPLIT_LAYERS=1` compiles one layer per executable (about 1.5 min compile, about 10 GB less HBM) and scales to `16384`-`32768` tokens/chip.
+Upload the checkpoint as in step 3 (the recipe reads `/data/assets/hf/Qwen3-30B-A3B`, or set `MODEL_PATH`), create the Ray cluster for the TPU as in step 4, then submit as in step 5:
 
 ```bash
 hf download Qwen/Qwen3-30B-A3B --local-dir /tmp/Qwen3-30B-A3B
