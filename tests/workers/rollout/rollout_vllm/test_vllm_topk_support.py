@@ -26,7 +26,8 @@ from vllm import LLM, SamplingParams
 from vllm.logprobs import FlatLogprobs, append_logprobs_for_next_position
 
 from verl.utils.device import get_device_name
-from verl.workers.rollout.utils import extract_response_topk_logprobs_with_coverage
+from verl.workers.rollout.utils import extract_response_topk_logprobs_with_coverage, extract_sampled_logprobs
+from verl.workers.rollout.vllm_rollout.utils import extract_prompt_logprobs
 
 DEVICE = get_device_name()
 
@@ -79,6 +80,35 @@ def test_processed_topk_support_evidence(llm, top_k, top_p):
         assert complete_rows > 0
     if top_k == -1 and top_p == 1.0:
         assert complete_rows == 0
+
+
+def test_sampled_and_prompt_logprobs_from_flat_rows_match_dict_rows(llm):
+    token_ids = llm.get_tokenizer().encode("List three prime numbers.")
+    prompts = [{"prompt_token_ids": token_ids}, {"prompt_token_ids": token_ids[:1]}]
+    outputs = {
+        flat: llm.generate(
+            prompts,
+            SamplingParams(temperature=0.0, max_tokens=32, logprobs=0, prompt_logprobs=0, flat_logprobs=flat),
+        )
+        for flat in (False, True)
+    }
+    for dict_output, flat_output in zip(outputs[False], outputs[True], strict=True):
+        dict_completion, flat_completion = dict_output.outputs[0], flat_output.outputs[0]
+        assert flat_completion.token_ids == dict_completion.token_ids
+        rows = zip(dict_completion.logprobs, dict_completion.token_ids, strict=True)
+        # These values come from two independent GPU generations. Greedy token IDs must match,
+        # while reduced-precision kernels can introduce small log-prob differences.
+        np.testing.assert_allclose(
+            extract_sampled_logprobs(flat_completion.logprobs),
+            [row[token].logprob for row, token in rows],
+            atol=1e-2,
+            rtol=0,
+        )
+        dict_prompt, flat_prompt = {}, {}
+        extract_prompt_logprobs(dict_output, 0, dict_prompt)
+        extract_prompt_logprobs(flat_output, 0, flat_prompt)
+        assert flat_prompt["prompt_ids"] == dict_prompt["prompt_ids"]
+        np.testing.assert_allclose(flat_prompt["prompt_logprobs"], dict_prompt["prompt_logprobs"], atol=1e-2, rtol=0)
 
 
 @pytest.mark.parametrize("k,expected_complete", [(2, False), (4, True)])

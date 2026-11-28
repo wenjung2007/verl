@@ -131,7 +131,8 @@ class CheckpointEngineConfig(BaseConfig):
 
     _mutable_fields = {"backend"}
 
-    # Backend for checkpoint engine: naive, nccl, nixl, hccl
+    # Backend for checkpoint engine: naive, nccl, nixl, hccl, delta_sharded,
+    # vllm_ipc, vllm_nccl, vllm_sparse_nccl, vllm_sharded_rdt, vllm_nccl_m2n
     backend: Optional[str] = "naive"
     # Bucket size in MB to transfer multiple weights at one time
     update_weights_bucket_megabytes: int = 2048
@@ -367,9 +368,7 @@ class RolloutConfig(BaseConfig):
             )
 
         if self.prompt_length <= 0:
-            raise ValueError(
-                f"rollout.prompt_length must be positive; got {self.prompt_length}."
-            )
+            raise ValueError(f"rollout.prompt_length must be positive; got {self.prompt_length}.")
 
         if self.name != "trtllm" and self.expert_parallel_size > 1:
             assert self.expert_parallel_size == (self.tensor_model_parallel_size * self.data_parallel_size), (

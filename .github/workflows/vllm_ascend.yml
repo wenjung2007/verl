@@ -85,8 +85,6 @@ jobs:
     env:
       HF_ENDPOINT: "https://hf-mirror.com"
       HF_HUB_ENABLE_HF_TRANSFER: "0" # This is more stable
-      PIP_INDEX_URL: "http://cache-service.nginx-pypi-cache.svc.cluster.local/pypi/simple"
-      PIP_TRUSTED_HOST: "cache-service.nginx-pypi-cache.svc.cluster.local"
       TRANSFORMERS_VERBOSITY: 'error'
     steps:
       - name: Check npu and CANN info
@@ -148,6 +146,7 @@ jobs:
       - name: Test vLLM sampling support and top-k evidence
         env:
           VLLM_USE_V2_MODEL_RUNNER: "1"
+          VLLM_WORKER_MULTIPROC_METHOD: "spawn"
           HCCL_HOST_SOCKET_PORT_RANGE: auto
           HCCL_NPU_SOCKET_PORT_RANGE: auto
         run: |
