@@ -224,35 +224,22 @@ Upload the checkpoint as in step 3 (the recipe reads `/data/assets/hf/Qwen3-30B-
 hf download Qwen/Qwen3-30B-A3B --local-dir /tmp/Qwen3-30B-A3B
 gcloud storage cp -r /tmp/Qwen3-30B-A3B gs://<BUCKET>/assets/hf/
 
-# TPU v7x
-ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- bash examples/tpu/grpo/run_qwen3_30b_a3b_torchtitan.sh
-
-# TPU v5p: also add "TPU_ACCELERATOR_TYPE": "v5p", "TORCH_TPU_TOPOLOGY": "2,2,4", "USE_MOE_SPARSE_CORE": "0" and
-# "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "USE_MOE_SPARSE_CORE" to env_vars in RUNTIME_ENV
-ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
-  env NNODES_TRAINER=4 N_CHIPS_TRAINER=4 NNODES_ROLLOUT=4 N_CHIPS_ROLLOUT=4 bash examples/tpu/grpo/run_qwen3_30b_a3b_torchtitan.sh
-
-# Graph mode, TPU v7x: lowest step time at 8192 tokens/chip
-ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
-  env TRAINER_MODE=graph_trainer bash examples/tpu/grpo/run_qwen3_30b_a3b_torchtitan.sh
-
-# Graph mode, TPU v7x: highest MFU (16384 tokens/chip)
+# TPU v7x 2x2x1
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env TRAINER_MODE=graph_trainer GRAPH_TRAINER_SPLIT_LAYERS=1 MAX_TOKEN_LEN_PER_GPU=16384 \
   bash examples/tpu/grpo/run_qwen3_30b_a3b_torchtitan.sh
 
-# Graph mode, TPU v5p 2x2x4: highest MFU (32768 tokens/chip)
+# TPU v5p 2x2x4: also add "TPU_ACCELERATOR_TYPE": "v5p", "TORCH_TPU_TOPOLOGY": "2,2,4", "USE_MOE_SPARSE_CORE": "0" and
+# "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "USE_MOE_SPARSE_CORE" to env_vars in RUNTIME_ENV
 ray job submit --working-dir . --runtime-env-json "$RUNTIME_ENV" -- \
   env NNODES_TRAINER=4 N_CHIPS_TRAINER=4 NNODES_ROLLOUT=4 N_CHIPS_ROLLOUT=4 \
   TRAIN_BATCH_SIZE=128 PPO_MINI_BATCH_SIZE=128 TRAINER_MODE=graph_trainer GRAPH_TRAINER_SPLIT_LAYERS=1 \
   MAX_TOKEN_LEN_PER_GPU=32768 bash examples/tpu/grpo/run_qwen3_30b_a3b_torchtitan.sh
 ```
 
-Measured graph-mode results (GSM8K GRPO, `MAX_RESPONSE_LEN=1024`, thinking off; medians over steps 2-8):
+Measured (GSM8K GRPO, `MAX_RESPONSE_LEN=1024`, thinking off; medians over steps 2-8):
 
-| Hardware (trainer) | Batch @ tokens/chip | Settings | `update_actor` | MFU |
-|---|---|---|---|---|
-| v5p 2x2x4 | 32 x 8 @8192 | `TRAINER_MODE=graph_trainer` (`prefetch`) | 3.29 s | 0.078 |
-| v5p 2x2x4 | 128 x 8 @32768 | `+ GRAPH_TRAINER_SPLIT_LAYERS=1` | 9.03 s | 0.110 |
-| v7x 2x2x1 | 16 x 8 @8192 | `TRAINER_MODE=graph_trainer` (`interleave`) | 2.02 s | 0.050 |
-| v7x 2x2x1 | 32 x 8 @16384 | `+ GRAPH_TRAINER_SPLIT_LAYERS=1` | 2.86 s | 0.067 |
+| Hardware (trainer) | Batch @ tokens/chip | `update_actor` | MFU |
+|---|---|---|---|
+| v7x 2x2x1 | 32 x 8 @16384 | 2.86 s | 0.067 |
+| v5p 2x2x4 | 128 x 8 @32768 | 9.03 s | 0.110 |
